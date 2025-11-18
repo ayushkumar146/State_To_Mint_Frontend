@@ -5,8 +5,10 @@ import UserBalance from "./components/sol/WalletBalance.tsx";
 import AirDrop from "./components/sol/AirDrop.tsx";
 import SendPage from "./components/sol/SignandSendToken.tsx";
 import CreateMint from "./components/spl/CreateMint.tsx";
-import ViewTokens from "./components/spl/ViewTokens.tsx"
-import CreateCustom from "./components/spl/CreateCustomToken.tsx"
+import ViewTokens from "./components/spl/ViewTokens.tsx";
+import CreateCustom from "./components/spl/CreateCustomToken.tsx";
+import MintTokens from "./components/spl/MintToken.tsx";
+
 function App() {
   const [count, setCount] = useState(0)
 
@@ -21,6 +23,7 @@ function App() {
         <Link to="/createmint" style={{ marginRight: 20 }}>Create Mint</Link>
         <Link to="/view-tokens" style={{ marginRight: 20 }}>View Tokens</Link>
         <Link to="/createcustomtokens" style={{ marginRight: 20 }}>Create Custom Tokens</Link>
+        <Link to="/minttokens" style={{ marginRight: 20 }}>Mint Tokens</Link>
 
         
 
@@ -34,6 +37,7 @@ function App() {
         <Route path="/createmint" element={<CreateMint />} />
         <Route path="/view-tokens" element={<ViewTokens />} />
         <Route path="/createcustomtokens" element={<CreateCustom />} />
+        <Route path="/minttokens" element={<MintTokens />} />
 
       </Routes>
     </BrowserRouter>
