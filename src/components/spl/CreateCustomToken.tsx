@@ -26,24 +26,76 @@ import {
 
 import { useWallet } from "@solana/wallet-adapter-react";
 
-// 🔥 Helper to avoid PDA crashes
-const getMetadataPDA = (mintPubkey: PublicKey) => {
+
+// -------------------------------------------------------
+// ⭐ Metadata PDA
+// -------------------------------------------------------
+const getMetadataPDA = (mint: PublicKey) => {
   return PublicKey.findProgramAddressSync(
     [
       Buffer.from("metadata"),
       METADATA_PROGRAM_ID.toBuffer(),
-      mintPubkey.toBuffer(),
+      mint.toBuffer(),
     ],
     METADATA_PROGRAM_ID
   );
 };
 
+
+// -------------------------------------------------------
+// ⭐ SAFE Transaction Sender
+// -------------------------------------------------------
+async function sendTx(
+  connection: Connection,
+  tx: Transaction,
+  wallet: any,
+  extraSigners: Keypair[] = []
+) {
+  const latest = await connection.getLatestBlockhash();
+
+  tx.recentBlockhash = latest.blockhash;
+  tx.feePayer = wallet.publicKey;
+
+  // 1️⃣ partial-sign with Keypairs (mint)
+  if (extraSigners.length > 0) {
+    tx.partialSign(...extraSigners);
+  }
+
+  // 2️⃣ Phantom signs
+  const signedTx = await wallet.signTransaction(tx);
+
+  // 3️⃣ Send raw
+  const sig = await connection.sendRawTransaction(signedTx.serialize(), {
+    skipPreflight: false,
+    maxRetries: 5,
+  });
+
+  // 4️⃣ Confirm
+  await connection.confirmTransaction(
+    {
+      signature: sig,
+      blockhash: latest.blockhash,
+      lastValidBlockHeight: latest.lastValidBlockHeight,
+    },
+    "confirmed"
+  );
+
+  return sig;
+}
+
+
+
+// -------------------------------------------------------
+// ⭐ MAIN PAGE COMPONENT
+// -------------------------------------------------------
 export default function CreateCustomTokenPage() {
   const wallet = useWallet();
 
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
-  const [imageUrl, setImageUrl] = useState(""); // MUST be JSON metadata link
+  const [description, setDescription] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
+
   const [decimals, setDecimals] = useState(9);
   const [initialSupply, setInitialSupply] = useState(1000);
 
@@ -52,14 +104,14 @@ export default function CreateCustomTokenPage() {
 
   const connection = new Connection(clusterApiUrl("devnet"), "confirmed");
 
+
+
+  // -------------------------------------------------------
+  // ⭐ CREATE TOKEN FUNCTION
+  // -------------------------------------------------------
   const createCustomToken = async () => {
     if (!wallet.publicKey || !wallet.signTransaction) {
-      alert("Connect Phantom first!");
-      return;
-    }
-
-    if (!imageUrl.endsWith(".json")) {
-      alert("⚠ You must use a JSON Metadata URL, not a direct image URL.\nExample: https://arweave.net/xxxx.json");
+      alert("Please connect Phantom first!");
       return;
     }
 
@@ -67,9 +119,32 @@ export default function CreateCustomTokenPage() {
     setResult({});
 
     try {
-      //
+      // ----------------------------------------------------
+      // 0️⃣ Upload Metadata JSON to your backend
+      // ----------------------------------------------------
+      const metaResponse = await fetch("http://localhost:3001/uploadMetadata", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          symbol,
+          description,
+          imageUrl,
+        }),
+      });
+
+      const metaData = await metaResponse.json();
+      const metadataUri = metaData.metadataUri;
+
+      if (!metadataUri) {
+        alert("Metadata upload failed");
+        return;
+      }
+
+
+      // ----------------------------------------------------
       // 1️⃣ Create Mint Account
-      //
+      // ----------------------------------------------------
       const mint = Keypair.generate();
       const rent = await connection.getMinimumBalanceForRentExemption(MINT_SIZE);
 
@@ -89,18 +164,14 @@ export default function CreateCustomTokenPage() {
       );
 
       const tx1 = new Transaction().add(createMintIx, initMintIx);
-      tx1.feePayer = wallet.publicKey;
-      tx1.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
 
-      tx1.partialSign(mint);
-      const signed1 = await wallet.signTransaction(tx1);
-      await connection.sendRawTransaction(signed1.serialize(), {
-        skipPreflight: false,
-      });
+      // ⭐ Pass mint Keypair here!
+      await sendTx(connection, tx1, wallet, [mint]);
 
-      //
-      // 2️⃣ Create Metadata PDA
-      //
+
+      // ----------------------------------------------------
+      // 2️⃣ Create Metadata Account
+      // ----------------------------------------------------
       const [metadataPDA] = getMetadataPDA(mint.publicKey);
 
       const metadataIx = createCreateMetadataAccountV3Instruction(
@@ -116,30 +187,29 @@ export default function CreateCustomTokenPage() {
             data: {
               name,
               symbol,
-              uri: imageUrl, // JSON metadata — REQUIRED
+              uri: metadataUri,
               sellerFeeBasisPoints: 0,
               creators: null,
               collection: null,
               uses: null,
             },
+            collectionDetails: null,
             isMutable: true,
           },
         }
       );
 
       const txMeta = new Transaction().add(metadataIx);
-      txMeta.feePayer = wallet.publicKey;
-      txMeta.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      await sendTx(connection, txMeta, wallet);
 
-      const signedMeta = await wallet.signTransaction(txMeta);
-      await connection.sendRawTransaction(signedMeta.serialize(), {
-        skipPreflight: false,
-      });
 
-      //
-      // 3️⃣ Create ATA
-      //
-      const ata = await getAssociatedTokenAddress(mint.publicKey, wallet.publicKey);
+      // ----------------------------------------------------
+      // 3️⃣ Create ATA & Mint Tokens
+      // ----------------------------------------------------
+      const ata = await getAssociatedTokenAddress(
+        mint.publicKey,
+        wallet.publicKey
+      );
 
       const createATAIx = createAssociatedTokenAccountInstruction(
         wallet.publicKey,
@@ -148,9 +218,6 @@ export default function CreateCustomTokenPage() {
         mint.publicKey
       );
 
-      //
-      // 4️⃣ Mint Tokens
-      //
       const amount = BigInt(initialSupply) * BigInt(10 ** decimals);
 
       const mintToIx = createMintToInstruction(
@@ -161,21 +228,16 @@ export default function CreateCustomTokenPage() {
       );
 
       const tx2 = new Transaction().add(createATAIx, mintToIx);
-      tx2.feePayer = wallet.publicKey;
-      tx2.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      await sendTx(connection, tx2, wallet);
 
-      const signed2 = await wallet.signTransaction(tx2);
-      await connection.sendRawTransaction(signed2.serialize(), {
-        skipPreflight: false,
-      });
 
-      //
-      // SUCCESS RESULT
-      //
+      // ----------------------------------------------------
+      // 🎉 DONE
+      // ----------------------------------------------------
       setResult({
         mint: mint.publicKey.toBase58(),
         ata: ata.toBase58(),
-        msg: "Custom token created successfully with metadata!",
+        msg: "Token created successfully!",
       });
     } catch (err: any) {
       console.error(err);
@@ -185,6 +247,11 @@ export default function CreateCustomTokenPage() {
     setLoading(false);
   };
 
+
+
+  // -------------------------------------------------------
+  // ⭐ UI
+  // -------------------------------------------------------
   return (
     <div style={{ padding: 20 }}>
       <h2>Create Custom SPL Token (With Metadata)</h2>
@@ -195,13 +262,11 @@ export default function CreateCustomTokenPage() {
       <label>Symbol:</label>
       <input value={symbol} onChange={(e) => setSymbol(e.target.value)} />
 
-      <label>Metadata JSON URL:</label>
-      <input value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} />
+      <label>Description:</label>
+      <input value={description} onChange={(e) => setDescription(e.target.value)} />
 
-      <small style={{ color: "gray" }}>
-        Example: https://arweave.net/xxxx.json  
-        (Must contain image, name, symbol)
-      </small>
+      <label>Image URL:</label>
+      <input value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} />
 
       <label>Decimals:</label>
       <input
@@ -227,10 +292,6 @@ export default function CreateCustomTokenPage() {
           <p><b>Your ATA:</b> {result.ata}</p>
           <p>{result.msg}</p>
         </div>
-      )}
-
-      {!result.mint && result.msg && (
-        <p style={{ color: "red" }}>{result.msg}</p>
       )}
     </div>
   );
