@@ -8,6 +8,7 @@ import CreateMint from "./components/spl/CreateMint.tsx";
 import ViewTokens from "./components/spl/ViewTokens.tsx";
 import CreateCustom from "./components/spl/CreateCustomToken.tsx";
 import MintTokens from "./components/spl/MintToken.tsx";
+import SwapTokens from "./components/spl/SwapTokens.tsx";
 
 function App() {
   const [count, setCount] = useState(0)
@@ -24,6 +25,7 @@ function App() {
         <Link to="/view-tokens" style={{ marginRight: 20 }}>View Tokens</Link>
         <Link to="/createcustomtokens" style={{ marginRight: 20 }}>Create Custom Tokens</Link>
         <Link to="/minttokens" style={{ marginRight: 20 }}>Mint Tokens</Link>
+        <Link to="/swaptokens" style={{ marginRight: 20 }}>Swap Tokens</Link>
 
         
 
